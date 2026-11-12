@@ -237,6 +237,21 @@ qemu-memfs: xv6memfs.img
 qemu-nox: fs.img xv6.img
 	$(QEMU) -nographic $(QEMUOPTS)
 
+# Deterministic run for bcbench: virtual (instruction-count) time instead of
+# host wall-clock time.  See DETERMINISM.md.
+#   -accel tcg            icount only exists under TCG (no KVM/HVF)
+#   -icount shift=0,sleep=off
+#                         1 guest instruction = 1 ns of virtual time, FIXED
+#                         (never shift=auto: it adapts to host speed)
+#   -rtc clock=vm         RTC follows virtual time too
+#   -snapshot             fs.img/xv6.img writes are discarded: same disk every boot
+#   -smp 1                one CPU: no inter-CPU interleaving
+QEMUDET = -accel tcg -icount shift=0,sleep=off -rtc clock=vm -snapshot -smp 1
+QEMUDETOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw -m 512 $(QEMUDET) $(QEMUEXTRA)
+
+qemu-nox-det: fs.img xv6.img
+	$(QEMU) -nographic $(QEMUDETOPTS)
+
 .gdbinit: .gdbinit.tmpl
 	sed "s/localhost:1234/localhost:$(GDBPORT)/" < $^ > $@
 
