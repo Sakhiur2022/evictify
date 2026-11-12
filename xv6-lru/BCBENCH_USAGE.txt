@@ -43,3 +43,5 @@ New output metrics:
 The existing disk-read counter is still a miss-triggered estimate, not an
 independently instrumented count of IDE commands. Do not interpret it as a
 verified physical-device read count.
+
+Deterministic mode: see DETERMINISM.md (make qemu-nox-det, ./run_det.sh).
