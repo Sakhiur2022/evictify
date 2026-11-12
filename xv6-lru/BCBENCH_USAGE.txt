@@ -1,0 +1,45 @@
+Buffer-cache benchmark usage
+============================
+
+The replacement policy is unchanged: the default xv6 LRU-like linked-list
+behavior remains the baseline.
+
+Run with the default workload parameters (120 scan blocks, 5 rounds):
+    bcbench
+
+Change the workload working-set size and rounds:
+    bcbench 240 5
+    bcbench 300 10
+
+Syntax:
+    bcbench [scan_blocks: 1-300] [rounds: 1-20]
+
+The scan starts at block 100. The four-block hot set starts at block 500.
+The maximum scan length is capped at 300 so it does not overlap the hot set.
+
+To change the actual kernel buffer-cache capacity, rebuild xv6 because NBUF
+is a compile-time array size, not a runtime setting that a user program can
+change. For example, from the xv6 source directory:
+
+    make clean
+    make NBUF=60 qemu-nox
+
+Then, at the xv6 shell prompt, run:
+    bcbench 240 5
+
+Other capacities can be tested with e.g. NBUF=30, NBUF=60, or NBUF=90.
+Always run make clean when switching NBUF values so stale objects are not
+reused. NBUF defaults to the original (MAXOPBLOCKS*3) when not specified.
+
+New output metrics:
+- Total Mem: sizeof the statically allocated buffer-cache array, including
+  each struct buf and its data array. This is cache memory, not total system RAM.
+- Delay: elapsed xv6 timer ticks, plus an approximate millisecond conversion
+  assuming 10 ms per tick. Timer ticks are coarse; use host-side QEMU timing
+  for more precise elapsed-time comparisons.
+- Total Compute: number of buffer-list inspections during cache lookup plus
+  victim selection. This is a software-work proxy, not a CPU instruction count.
+
+The existing disk-read counter is still a miss-triggered estimate, not an
+independently instrumented count of IDE commands. Do not interpret it as a
+verified physical-device read count.
