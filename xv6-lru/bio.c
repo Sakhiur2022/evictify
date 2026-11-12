@@ -230,9 +230,23 @@ bcache_bench(int scan_blocks, int rounds)
 
   for(b = bcache.buf; b < bcache.buf + NBUF; b++) {
     if(b->refcnt == 0 && (b->flags & B_DIRTY) == 0) {
-      // Keep the buffer's device/block identity unique; clearing B_VALID
-      // is sufficient to make its contents cold for benchmark purposes.
+      // Cold start: clear B_VALID and drop the old identity so that no
+      // block from an earlier run (or from boot-time fs activity) can
+      // match.  (dev 0xffffffff is never a real device.)
       b->flags = 0;
+      b->dev = 0xffffffff;
+      b->blockno = 0xffffffff;
+
+      // Canonical list order: move every free buffer to the MRU end in
+      // array order.  Without this, lookup/victim inspection counts and
+      // the victim chosen depend on what ran before (e.g. a previous
+      // bcbench in the same boot).  The replacement rule is unchanged.
+      b->next->prev = b->prev;
+      b->prev->next = b->next;
+      b->next = bcache.head.next;
+      b->prev = &bcache.head;
+      bcache.head.next->prev = b;
+      bcache.head.next = b;
     }
   }
 
@@ -246,7 +260,14 @@ bcache_bench(int scan_blocks, int rounds)
   bench_stats.victim_steps = 0;
   release(&bcache.lock);
 
+  // Tick-align the start: wait for the next timer tick edge so every run
+  // begins at phase 0 of a tick.  Otherwise the +/-1 tick quantization
+  // error depends on where in a 10 ms period the command happened to land.
   start_ticks = bench_ticks();
+  while(bench_ticks() == start_ticks)
+    ;
+  start_ticks = bench_ticks();
+
   acquire(&bcache.lock);
   bench_active = 1;
   release(&bcache.lock);
