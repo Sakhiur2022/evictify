@@ -35,6 +35,9 @@ struct {
   struct buf head;
 } bcache;
 // Benchmark configuration.
+#define BENCH_US_MISS 4000   // modeled cost of one miss/disk read (us)
+#define BENCH_US_HIT  10     // modeled cost of one hit (us)
+#define BENCH_US_STEP 1      // modeled cost of one list inspection (us)
 #define BENCH_HOT_START     500
 #define BENCH_HOT_COUNT     4
 #define BENCH_SCAN_START    100
@@ -214,7 +217,7 @@ bcache_bench(int scan_blocks, int rounds)
   uint i, j, pass, round;
   uint requests, hits, misses, disk_reads;
   uint hot_requests, hot_hits, lookup_steps, victim_steps;
-  uint start_ticks, end_ticks, elapsed_ticks;
+  uint start_ticks, end_ticks, wall_ticks, elapsed_ticks, delay_us;
   uint hit_rate10, hot_rate10;
 
   if(scan_blocks < 1 || scan_blocks > BENCH_MAX_SCAN_BLOCKS ||
@@ -294,7 +297,16 @@ bcache_bench(int scan_blocks, int rounds)
   }
 
   end_ticks = bench_ticks();
-  elapsed_ticks = end_ticks - start_ticks;
+  wall_ticks = end_ticks - start_ticks;   // informational only: host-timing dependent
+
+  /*
+   * Deterministic "Delay": a logical clock driven by the counted events, not
+   * by the LAPIC timer.  Same workload + same replacement result => same
+   * number of ticks in every run, under any QEMU mode.
+   *   cache miss (disk read) : BENCH_US_MISS us
+   *   cache hit              : BENCH_US_HIT  us
+   *   list inspection        : BENCH_US_STEP us
+   */
 
   acquire(&bcache.lock);
   bench_active = 0;
@@ -307,6 +319,10 @@ bcache_bench(int scan_blocks, int rounds)
   lookup_steps = bench_stats.lookup_steps;
   victim_steps = bench_stats.victim_steps;
   release(&bcache.lock);
+
+  delay_us = misses * BENCH_US_MISS + hits * BENCH_US_HIT +
+             (lookup_steps + victim_steps) * BENCH_US_STEP;
+  elapsed_ticks = delay_us / 10000;   // 10 ms per tick
 
   hit_rate10 = requests ? (hits * 1000) / requests : 0;
   hot_rate10 = hot_requests ? (hot_hits * 1000) / hot_requests : 0;
@@ -326,8 +342,9 @@ bcache_bench(int scan_blocks, int rounds)
   cprintf("Hot-set requests: %d\n", hot_requests);
   cprintf("Hot-set hits: %d\n", hot_hits);
   cprintf("Hot-set hit rate: %d.%d%%\n", hot_rate10 / 10, hot_rate10 % 10);
-  cprintf("Delay: %d timer ticks\n", elapsed_ticks);
+  cprintf("Delay: %d timer ticks (deterministic model)\n", elapsed_ticks);
   cprintf("Approx. delay: %d ms (assuming 10 ms/tick)\n", elapsed_ticks * 10);
+  cprintf("Wall-clock ticks (informational, varies): %d\n", wall_ticks);
   cprintf("Lookup list inspections: %d\n", lookup_steps);
   cprintf("Victim-selection inspections: %d\n", victim_steps);
   cprintf("Total Compute (list-inspection proxy): %d\n", lookup_steps + victim_steps);
