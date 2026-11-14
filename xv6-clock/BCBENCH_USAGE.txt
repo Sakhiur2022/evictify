@@ -1,0 +1,67 @@
+Buffer-cache benchmark: LRU (default xv6) vs Clock (second chance)
+===================================================================
+
+BUILD VARIANTS (compile-time; run `make clean` between them)
+  make NBUF=60 CFLAGS_EXTRA="-DBCACHE_LRU"                       LRU
+  make NBUF=60                                                   Clock (B_REF set on load)
+  make NBUF=60 CFLAGS_EXTRA="-DBCACHE_CLOCK_NOREF_ON_LOAD"       Clock-NR (B_REF only on re-use)
+  add -DBCACHE_LOOKUP_HASH to ANY of them: policy-independent hash lookup
+  (use this for the clean replacement-policy comparison; omit for the
+   as-built xv6 list lookup).
+
+RUN (inside xv6)
+  bcbench toy
+  bcbench safety
+  bcbench seq     scan=240 rounds=5
+  bcbench hotscan scan=120 hot=4 interval=40 passes=3 rounds=5     (original workload)
+  bcbench wset    hot=24 passes=3 rounds=5
+  bcbench pollute scan=120 hot=8 passes=3 rounds=5
+  bcbench mixed   scan=120 hot=8 interval=40 passes=3 rounds=5
+  bcbench pollute scan=60 hot=8 rounds=1 trace=200                 (print first 200 requests)
+  bcbench 120 5                                                    (legacy = hotscan)
+
+HOST (no QEMU; compiles bio.c unmodified, cross-checks an independent model)
+  bash compare_bcache.sh            full matrix -> ../results.md, ../results.csv
+  bash compare_bcache.sh --quick
+  ./sim binary directly: bcsim args = workload scan hot interval passes rounds [trace]
+
+WORKLOADS (request sequence depends only on parameters, never on cache state)
+  toy      NBUF distinct blocks, re-read block T, one new block, re-read T.
+           Hand-derivable result; the run asserts it:
+             LRU:      T kept, T+1 evicted, 1 inspection
+             Clock:    T evicted (all B_REF set -> full sweep), NBUF+1 inspections
+             Clock-NR: T kept, T+1 evicted, 2 inspections
+  safety   pin one buffer, leave one dirty, flood 2*NBUF+5 blocks: neither may be evicted.
+  seq      rounds x scan fresh blocks, never reused (region 100..499 wraps; distance 400).
+  hotscan  per round: scan blocks 100..100+scan-1 (same blocks each round); after every
+           `interval` scan blocks, `passes` passes over hot blocks 500..500+hot-1.
+  wset     rounds x `passes` passes over the hot set only.
+  pollute  (hot x passes, fresh scan of `scan` blocks) x rounds, then hot x passes.
+  mixed    per round: hot x passes; fresh scan with one hot pass every `interval`;
+           re-read last `hot` scanned blocks (short reuse); read warm set 600..600+2*hot-1 once.
+
+METRICS
+  Cache effectiveness: requests, hits, misses, hit rate, hot-set requests/hits/hit rate,
+    hot blocks evicted, working-set retention (fraction of hot blocks still resident at the
+    start of each hot phase, first phase excluded, probed without side effects).
+  Lookup cost: entries inspected during lookup (+ per request).
+  Replacement cost: victim searches/inspections; LRU: list unlinks, links, pointer writes (6 per release);
+    Clock: hand advances, ref-bit checks, clears, second-chance events, ref-bit sets (hit/load), hand writes.
+  Modeled cost (us), same unit costs for all policies:
+    I/O = misses*4000, hit = hits*10, lookup = lookup_insp*1,
+    replacement = victim_insp*1 + bookkeeping_writes*1
+      (LRU writes = list pointer stores; Clock writes = ref clears + ref sets + one hand store/search).
+    total = sum.  Management = lookup + replacement.
+  Request sequence checksum: equal across policies for the same parameters.
+
+SANITY CHECKS (every request): list integrity, Clock hand range, refcnt range, no duplicate
+  identities, hash-chain integrity, no B_REF under LRU, no busy/dirty eviction.
+  End of run: hits+misses=requests, driver/cache request counts agree, live sequence = dry-run
+  sequence, victim searches = misses, per-policy counter identities.
+
+TRACE: trace=N prints the first N requests: hit/miss, lookup steps, victim buffer, old block,
+  inspections (LRU: position from LRU end; Clock: hand before->after, second chances), HOT-EVICT.
+  Off by default (trace=0); it never touches counters.
+
+NOTE: counters only count requests issued by the benchmark itself.  Other processes that use
+  the disk during the run can still perturb cache contents (keep the system idle).
