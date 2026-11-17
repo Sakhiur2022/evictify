@@ -204,8 +204,10 @@ binit(void)
     b->prev = &bcache.head;
     b->dev = INVALID_DEV;        // holds nothing (was (0,0) for all buffers)
     b->blockno = INVALID_DEV;
+#ifdef BCACHE_LOOKUP_HASH
     b->hnext = 0;
     b->hashed = 0;
+#endif
     initsleeplock(&b->lock, "buffer");
     bcache.head.next->prev = b;
     bcache.head.next = b;
@@ -862,6 +864,7 @@ bcache_bench(int workload, int scan_blocks, int hot_count, int hot_interval,
 {
   uint start_ticks, end_ticks, wall_ticks, delay_us, ticks_model;
   uint exp_req, exp_hash;
+  uint mem_data, mem_meta, mem_policy, mem_lookup, mem_total;
   uint io_us, hit_us, lookup_us, repl_us, repl_writes;
   struct buf *b;
 
@@ -966,12 +969,34 @@ bcache_bench(int workload, int scan_blocks, int hot_count, int hot_interval,
   ticks_model = delay_us / 10000;
 
   (void)b;
+  mem_data = NBUF * BSIZE;
+  mem_meta = NBUF * (sizeof(struct buf) - BSIZE);
+  mem_total = sizeof(bcache);
+#ifdef BCACHE_LRU
+  // list links on every buffer + the sentinel (a whole struct buf as built)
+  mem_policy = NBUF * (sizeof(bcache.buf[0].prev) + sizeof(bcache.buf[0].next)) + sizeof(bcache.head);
+#else
+  // reference bit lives in the existing flags word (0 extra bytes); only the hand is new
+  mem_policy = sizeof(bcache.hand);
+#endif
+#ifdef BCACHE_LOOKUP_HASH
+  mem_lookup = NBUF * (sizeof(bcache.buf[0].hnext) + sizeof(bcache.buf[0].hashed)) + sizeof(bcache.hbucket);
+#else
+  mem_lookup = 0;
+#endif
   cprintf("\n=== xv6 Buffer Cache Benchmark ===\n");
   cprintf("Policy: %s\n", BCACHE_POLICY_NAME);
   cprintf("Lookup structure: %s\n", BCACHE_LOOKUP_NAME);
   cprintf("Cache capacity: %d buffers\n", NBUF);
   cprintf("Buffer structure size: %d bytes\n", (int)sizeof(struct buf));
   cprintf("Total Mem (buffer cache): %d bytes\n", (int)sizeof(bcache.buf));
+  cprintf("-- Memory overhead (bytes; from sizeof, so it tracks the real layout) --\n");
+  cprintf("Block data (NBUF*BSIZE): %d\n", mem_data);
+  cprintf("Per-buffer metadata (NBUF*(sizeof(buf)-BSIZE)): %d\n", mem_meta);
+  cprintf("Policy-specific state: %d\n", mem_policy);
+  cprintf("Lookup-structure state (hash only): %d\n", mem_lookup);
+  cprintf("Total cache memory sizeof(bcache): %d\n", mem_total);
+  print_pct("Overhead vs. block data", mem_total - mem_data, mem_data);
   cprintf("Workload id: %d  scan=%d hot=%d interval=%d passes=%d rounds=%d\n",
           workload, scan_blocks, hot_count, hot_interval, hot_passes, rounds);
   cprintf("Cold start: pinned/dirty buffers not reset: %d\n", bench_cold_pinned);
@@ -1022,8 +1047,8 @@ bcache_bench(int workload, int scan_blocks, int hot_count, int hot_interval,
   cprintf("Delay: %d timer ticks (deterministic model)\n", ticks_model);
   cprintf("Wall-clock ticks (informational, varies): %d\n", wall_ticks);
 
-  cprintf("CSVH,policy,lookup,nbuf,workload,scan,hot,interval,passes,rounds,requests,hits,misses,hot_req,hot_hits,ws_probes,ws_res,lookup_insp,vic_searches,vic_insp,lru_unlink,lru_link,lru_ptrw,hand_adv,ref_checks,ref_clears,second_chances,ref_set_hit,ref_set_load,hand_writes,hot_evict,io_us,hit_us,lookup_us,repl_us,total_us,seqhash\n");
-  cprintf("CSV,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%x\n",
+  cprintf("CSVH,policy,lookup,nbuf,workload,scan,hot,interval,passes,rounds,requests,hits,misses,hot_req,hot_hits,ws_probes,ws_res,lookup_insp,vic_searches,vic_insp,lru_unlink,lru_link,lru_ptrw,hand_adv,ref_checks,ref_clears,second_chances,ref_set_hit,ref_set_load,hand_writes,hot_evict,io_us,hit_us,lookup_us,repl_us,total_us,seqhash,mem_total,mem_policy,mem_lookup\n");
+  cprintf("CSV,%s,%s,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%x,%d,%d,%d\n",
           BCACHE_POLICY_TAG, BCACHE_LOOKUP_NAME, NBUF, workload, scan_blocks,
           hot_count, hot_interval, hot_passes, rounds,
           bench_stats.requests, bench_stats.hits, bench_stats.misses,
@@ -1034,7 +1059,8 @@ bcache_bench(int workload, int scan_blocks, int hot_count, int hot_interval,
           bench_stats.hand_adv, bench_stats.ref_checks, bench_stats.ref_clears,
           bench_stats.second_chances, bench_stats.ref_sets_hit, bench_stats.ref_sets_load,
           bench_stats.hand_writes, bench_stats.hot_evictions,
-          io_us, hit_us, lookup_us, repl_us, delay_us, bench_seq_hash);
+          io_us, hit_us, lookup_us, repl_us, delay_us, bench_seq_hash,
+          mem_total, mem_policy, mem_lookup);
 
   if(workload == W_TOY)
     toy_verify();
