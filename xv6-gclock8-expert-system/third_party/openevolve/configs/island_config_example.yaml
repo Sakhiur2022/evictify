@@ -1,0 +1,72 @@
+# OpenEvolve Island-Based Evolution Configuration
+# This configuration demonstrates the proper use of island-based evolution
+
+# General settings
+max_iterations: 1000
+checkpoint_interval: 100
+log_level: "INFO"
+
+# LLM configuration
+llm:
+  primary_model: "gemini-2.0-flash-lite"
+  primary_model_weight: 0.8
+  secondary_model: "gemini-2.0-flash"
+  secondary_model_weight: 0.2
+  temperature: 0.7
+  top_p: 0.95
+  max_tokens: 4096
+
+# Database configuration with proper island settings
+database:
+  population_size: 500
+  archive_size: 100
+  
+  # Island-based evolution settings
+  num_islands: 5                    # Number of separate populations
+  # Optional starting program per island; null/missing starts the island as usual.
+  # Entry 0 must be null (island 0 starts from the command-line initial program).
+  # Relative paths resolve against this config file's directory.
+  # island_initial_programs: [null, "seeds/greedy.py", null, "seeds/random_search.py"]
+  migration_interval: 50            # Migrate every 50 generations
+  migration_rate: 0.1               # Migrate 10% of top programs
+  
+  # Selection parameters
+  elite_selection_ratio: 0.1
+  exploration_ratio: 0.3
+  exploitation_ratio: 0.7
+  # Note: diversity_metric fixed to "edit_distance"
+  
+  # Feature map dimensions for MAP-Elites
+  # Default if not specified: ["complexity", "diversity"]
+  # Comment out the line below to use the defaults
+  # feature_dimensions: ["complexity", "diversity"]
+  feature_bins: 10
+  # Can also use per-dimension bins:
+  # feature_bins:
+  #   performance: 20
+  #   correctness: 10
+
+# Prompt configuration
+prompt:
+  system_message: "Improve the program through evolution."
+  # Literal text or template names; null/missing uses system_message
+  # Reuse this configuration when resuming from a checkpoint.
+  island_system_messages:
+    - "Focus on simpler algorithms."
+    - null
+    - "Focus on runtime performance."
+  num_top_programs: 3
+  num_diverse_programs: 2
+  use_template_stochasticity: true
+
+# Evaluator configuration
+evaluator:
+  timeout: 300
+  max_retries: 3
+  cascade_evaluation: true
+  parallel_evaluations: 4
+
+# Evolution settings
+diff_based_evolution: true
+allow_full_rewrites: false
+max_code_length: 10000

@@ -1,0 +1,117 @@
+# OpenEvolve configuration: evolve the xv6 buffer-cache replacement policy (policy_evolve.h).
+#
+# Run (from xv6-lru/):   bash evolve/run_evolution.sh 300
+# Paths below that are relative (island_initial_programs) resolve against THIS file's directory.
+
+max_iterations: 300
+checkpoint_interval: 20
+log_level: "INFO"
+random_seed: 42
+language: "c"
+file_suffix: ".h"
+
+# Only the two EVOLVE-BLOCK regions may change; OpenEvolve reverts every edit outside them
+# (the frame holds the cost-counting macros, so the LLM cannot touch the accounting).
+diff_based_evolution: true
+enforce_evolve_blocks: true
+max_code_length: 20000
+
+early_stopping_patience: 100
+early_stopping_metric: "combined_score"
+
+# ---------------------------------------------------------------------------------------
+# LLM backend.  OPTION A (default): Claude through the Claude Code CLI -- no API key needed
+#   npm install -g @anthropic-ai/claude-code ;  claude login
+# OPTION B: any OpenAI-compatible endpoint -- comment out Option A and use the block below.
+# ---------------------------------------------------------------------------------------
+llm:
+  provider: "claude_code"
+  models:
+    - name: "sonnet"
+      weight: 0.8
+      max_tokens: 16000
+      timeout: 300
+      max_budget_usd: 1.0
+    - name: "opus"
+      weight: 0.2
+      max_tokens: 16000
+      timeout: 400
+      max_budget_usd: 2.0
+  retries: 3
+  retry_delay: 5
+  # --- OPTION B ---------------------------------------------------------------------
+  # api_base: "https://api.openai.com/v1"          # or your provider's OpenAI-compatible URL
+  # api_key: ${OPENAI_API_KEY}
+  # models:
+  #   - name: "REPLACE_WITH_YOUR_MODEL"
+  #     weight: 1.0
+  # temperature: 0.7
+  # max_tokens: 16000
+
+prompt:
+  num_top_programs: 3
+  num_diverse_programs: 2
+  include_artifacts: true
+  max_artifact_bytes: 8192
+  system_message: |
+    You are an expert operating-systems engineer designing the BLOCK REPLACEMENT POLICY of the xv6
+    buffer cache. You edit only the two EVOLVE-BLOCK regions of policy_evolve.h (a C header compiled
+    into bio.c). The comment at the top of the file defines the hooks and the ONLY allowed interface.
+
+    OBJECTIVE
+      Maximise `combined_score` = geometric-mean ratio of modeled total cost versus the default LRU
+      policy over a suite of workloads and cache sizes (>1.0 beats LRU; the seed LRU scores 1.0),
+      lightly discounted for memory used by your policy state. The cost model is:
+        miss 4000us, hit 10us, every inspection/read 1us, every write 1us.
+      A miss therefore costs as much as ~4000 bookkeeping operations: fewer misses is the main lever,
+      but per-request bookkeeping (writes especially) is also charged, so keep hooks cheap.
+
+    WORKLOADS (parameters vary; you cannot see them)
+      * one-time sequential scans polluting the cache      * a small hot set re-referenced at
+        intervals between scans (reuse distance a little above or below the cache size)
+      * repeated working sets, cyclic loops slightly larger than the cache (LRU's worst case)
+      * skewed random reuse (a few very popular blocks, a long tail)
+      * mixtures of the above, with cache sizes from 30 to 120 buffers.
+
+    KNOWN FACTS (measured on this benchmark, so use them)
+      * Clock that sets its reference bit when a block is LOADED loses to LRU on scan+hot workloads:
+        scan blocks look as "recently used" as hot blocks.
+      * Clock that sets the bit only on RE-REFERENCE (hit) never lost to LRU in the suite and beats it
+        where the hot set's reuse distance slightly exceeds the cache size.
+      * LRU keeps a re-used block only if its stack distance <= cache size.
+      Ideas worth trying (not exhaustive): frequency counters with aging, two-segment (probationary /
+      protected) schemes like 2Q or SLRU, ghost entries of recently evicted blocks (you get the evicted
+      block id in pol_on_load) to adapt like ARC, LRU-K / inter-reference-recency, detection of
+      sequential access runs (blockno == previous + 1) to evict scan blocks first, loop detection,
+      bounded-cost clock variants with multiple hands or counters.
+
+    HARD RULES (violations score 0; see the evaluator messages)
+      * All persistent state lives in struct pol_meta / struct pol_global, accessed ONLY with
+        P_GET/P_SET/G_GET/G_SET. No globals, no static locals, no #define/#include, no libc,
+        no 64-bit or floating types (32-bit kernel, -Wall -Werror, no unused functions).
+      * pol_victim MUST return a buffer for which pol_cand_ok(i) is true. Hooks must terminate quickly.
+      * Do not special-case NBUF values or specific block numbers; a held-out suite with different
+        parameters and cache sizes (45, 75, 120) is reported, and over-fitting shows as a large gap.
+      * Keep the code short and readable; prefer one clear idea per change.
+  # (the evaluator's `artifacts` show the worst workloads and any compile/runtime errors)
+
+database:
+  population_size: 200
+  archive_size: 30
+  num_islands: 3
+  # island 0 starts from the program given on the command line (LRU seed); the others from Clock seeds
+  island_initial_programs: [null, "seeds/clock.h", "seeds/clock_nr.h"]
+  migration_interval: 25
+  migration_rate: 0.1
+  elite_selection_ratio: 0.1
+  exploration_ratio: 0.25
+  exploitation_ratio: 0.65
+  # MAP-Elites behaviour axes (raw values returned by evaluator.py): keeps diverse designs alive
+  feature_dimensions: ["miss_ratio_gm_train", "mgmt_share_pct"]
+  feature_bins: 8
+
+evaluator:
+  timeout: 180
+  max_retries: 1
+  parallel_evaluations: 4
+  cascade_evaluation: false        # evaluator.py does its own staged early-exit
